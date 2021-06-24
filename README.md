@@ -1,4 +1,4 @@
-## Hyperspectral Image Super-resolution using pyramid methods
+## [Hyperspectral Image Super-resolution using pyramid methods](https://haydenhs.github.io/HyperSR/)
 
 ### Intro
 
