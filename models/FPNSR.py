@@ -2,24 +2,19 @@ import torch
 import math
 
 
-class SRFPN(torch.nn.Module):
+"""Hyperspectral image super-resolution using feature pyramid network"""
+class FPNSR(torch.nn.Module):
     def __init__(self, n_channels, n_feats, n_layers):
-        super(SRFPN, self).__init__()
-        self.C = n_channels
-        self.N = n_layers
-        self.B = 3
+        super(FPNSR, self).__init__()
         self.in_conv = torch.nn.Conv2d(in_channels=n_channels, out_channels=n_feats*4, kernel_size=1)
         self.relu = torch.nn.ReLU(inplace=True)
         self.py = FPNBlock(n_feats=n_feats*4, n_layers=n_layers, use_tail=True)
-        # self.t = torch.nn.Conv2d(in_channels=n_feats, out_channels=n_feats*4, kernel_size=1)
-        # self.s = torch.nn.Conv2d(in_channels=n_feats*4, out_channels=n_feats, kernel_size=1)
         self.net = EDSR(n_feats=n_feats, n_blocks=12, res_scale=0.1)
         # self.upsample = Upsampler(scale=2, n_feats=n_feats)
         self.out_conv = torch.nn.Conv2d(in_channels=n_feats, out_channels=n_channels, kernel_size=3, padding=1)
 
-    def forward(self, x):
-        y = self.in_conv(x)
-        # y = self.t(y)
+    def forward(self, x, lms):
+        y = self.in_conv(lms)
         y = self.py(y)
         y = self.net(y)
         out = self.out_conv(y)
@@ -72,12 +67,12 @@ class FPNBlock(torch.nn.Module):
         down = []
         for i in range(n_layers):
             up.append(ResGroupBlock(n_feats=n_feats, n_groups=4, res_scale=0.1))
-        for j in range(n_layers-1):
+        for j in range(n_layers):
             down.append(FuseBlock(n_feats=n_feats))
         self.up = torch.nn.Sequential(*up)
         self.down = torch.nn.Sequential(*down)
         self.smooth = torch.nn.AvgPool2d(kernel_size=2, stride=2)
-        self.ret = torch.nn.Conv2d(in_channels=n_feats, out_channels=n_feats//4, kernel_size=1)
+        self.conv = torch.nn.Conv2d(in_channels=n_feats, out_channels=n_feats//4, kernel_size=1)
         self.relu = torch.nn.ReLU(inplace=True)
 
     def forward(self, x):
@@ -86,17 +81,9 @@ class FPNBlock(torch.nn.Module):
             x = self.up[i](x)
             upstair.append(x)
             x = self.smooth(x)
-        # y starts from the last output in upstream
-        y = self.ret(upstair[self.N-1])
-        if self.use_tail:
-            down_cases = self.N - 1
-        else:
-            down_cases = self.N - 2
-        for i in range(down_cases):
-            if self.use_tail:
-                index = down_cases - i - 1
-            else:
-                index = down_cases - i
+        y = self.conv(x)
+        for i in range(self.N):
+            index = self.N - 1 - i
             y = self.down[i](y, upstair[index])
         return y
 
@@ -105,7 +92,6 @@ class FuseBlock(torch.nn.Module):
     def __init__(self, n_feats):
         super(FuseBlock, self).__init__()
         self.deconv = Upsampler(scale=2, n_feats=n_feats//4)
-        # self.pool = Downsampler(scale=2, n_feats=n_feats)
         self.conv = torch.nn.Conv2d(in_channels=n_feats, out_channels=n_feats//4, kernel_size=1)
 
     def forward(self, x1, x2):
@@ -155,16 +141,10 @@ class Upsampler(torch.nn.Sequential):
         super(Upsampler, self).__init__(*m)
 
 
-class Downsampler(torch.nn.Sequential):
-    def __init__(self, scale, n_feats):
-        m = []
-        if (scale & (scale - 1)) == 0:  # Is scale = 2^n?
-            for _ in range(int(math.log(scale, 2))):
-                m.append(torch.nn.Conv2d(n_feats, n_feats, kernel_size=3, padding=1, stride=2))
-                m.append(torch.nn.LeakyReLU(0.02, inplace=True))
-        elif scale == 3:
-            m.append(torch.nn.Conv2d(n_feats, n_feats, kernel_size=3, padding=1, stride=3))
-            m.append(torch.nn.LeakyReLU(0.02, inplace=True))
-        else:
-            raise NotImplementedError
-        super(Downsampler, self).__init__(*m)
+if __name__ == '__main__':
+    net = FPNSR(n_channels=128, n_feats=256, n_layers=4)
+    print(net)
+    x = torch.randn(1,128,16,16)
+    lms = torch.randn(1,128,64,64)
+    y = net(x, lms)
+    print(y.shape)
